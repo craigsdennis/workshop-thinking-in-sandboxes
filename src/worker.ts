@@ -1,4 +1,5 @@
 /// <reference types="@cloudflare/workers-types" />
+import { env as workerEnv } from 'cloudflare:workers';
 import { getSandbox, proxyTerminal, proxyToSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { exampleById, sessionById, type ExampleId, type SessionId } from './workshop';
 import type { ExampleRunResult, SessionRunResult, TerminalBootstrapResult } from './types';
@@ -20,6 +21,7 @@ type ExampleRequestBody = {
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
 const LOCAL_PREVIEW_PROXY_PREFIX = '/__sandbox_preview';
+const env = workerEnv as unknown as Env;
 
 function isLikelyPreviewHostname(hostname: string): boolean {
   return /^\d+-/.test(hostname) && hostname.endsWith('.localhost');
@@ -35,9 +37,9 @@ function splitHostAndPort(hostValue: string): { hostname: string; port?: string 
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const localPreviewProxyResponse = await handleLocalPreviewProxyRoute(request, env, url);
+    const localPreviewProxyResponse = await handleLocalPreviewProxyRoute(request, url);
     if (localPreviewProxyResponse) return localPreviewProxyResponse;
 
     const hostHeader = request.headers.get('host') ?? '';
@@ -102,28 +104,28 @@ export default {
 
 
     if (url.pathname === '/ws/terminal') {
-      return await handleTerminalWebSocket(request, env, url);
+      return await handleTerminalWebSocket(request, url);
     }
 
     if (url.pathname === '/api/terminal/bootstrap') {
-      return await handleTerminalBootstrap(env);
+      return await handleTerminalBootstrap();
     }
 
     if (url.pathname.startsWith('/api/sessions/')) {
-      return await handleSessionRequest(env, url);
+      return await handleSessionRequest(url);
     }
 
     if (url.pathname.startsWith('/api/examples/')) {
-      return await handleExampleRequest(request, env, url);
+      return await handleExampleRequest(request, url);
     }
 
-    return await serveSpaAssets(request, env);
+    return await serveSpaAssets(request);
   }
 };
 
-async function handleExampleRequest(request: Request, env: Env, url: URL): Promise<Response> {
+async function handleExampleRequest(request: Request, url: URL): Promise<Response> {
   if (url.pathname === '/api/examples/ai-generated-code/generate') {
-    return await handleAiCodeGeneration(request, env);
+    return await handleAiCodeGeneration(request);
   }
 
   const id = url.pathname.replace('/api/examples/', '') as ExampleId;
@@ -141,7 +143,7 @@ async function handleExampleRequest(request: Request, env: Env, url: URL): Promi
 
   try {
     const body = request.method === 'POST' ? ((await request.json()) as ExampleRequestBody) : undefined;
-    const result = await runExample(id, body?.input, body?.prompt, request, env);
+    const result = await runExample(id, body?.input, body?.prompt, request);
     return json(result);
   } catch (error) {
     return json(
@@ -155,7 +157,7 @@ async function handleExampleRequest(request: Request, env: Env, url: URL): Promi
   }
 }
 
-async function handleAiCodeGeneration(request: Request, env: Env): Promise<Response> {
+async function handleAiCodeGeneration(request: Request): Promise<Response> {
   if (request.method !== 'POST') {
     return json({ ok: false, message: 'Method not allowed' }, 405);
   }
@@ -167,7 +169,7 @@ async function handleAiCodeGeneration(request: Request, env: Env): Promise<Respo
     return json({ ok: false, message: 'Prompt is required.' }, 400);
   }
 
-  const code = await generatePythonFromPrompt(prompt, env);
+  const code = await generatePythonFromPrompt(prompt);
   return json({
     ok: true,
     prompt,
@@ -175,7 +177,7 @@ async function handleAiCodeGeneration(request: Request, env: Env): Promise<Respo
   });
 }
 
-async function generatePythonFromPrompt(prompt: string, env: Env): Promise<string> {
+async function generatePythonFromPrompt(prompt: string): Promise<string> {
   const model = '@cf/zai-org/glm-4.7-flash' as unknown as keyof AiModels;
   const system = [
     'You generate Python scripts for an educational Cloudflare Sandbox workshop.',
@@ -205,11 +207,7 @@ print('Length:', len(prompt))`;
   return sanitizePython(raw);
 }
 
-async function generateDataAnalysisCode(
-  question: string,
-  csvStructure: string,
-  env: Env
-): Promise<string> {
+async function generateDataAnalysisCode(question: string, csvStructure: string): Promise<string> {
   const model = '@cf/zai-org/glm-4.7-flash' as unknown as keyof AiModels;
   const system = [
     'You write production-quality Python data analysis scripts for Cloudflare Sandbox demos.',
@@ -519,7 +517,6 @@ function buildLocalPreviewFallbackUrl(previewUrl: string, requestUrl: string): s
 
 async function handleLocalPreviewProxyRoute(
   request: Request,
-  env: Env,
   url: URL
 ): Promise<Response | null> {
   if (!url.pathname.startsWith(`${LOCAL_PREVIEW_PROXY_PREFIX}/`)) return null;
@@ -557,24 +554,23 @@ async function runExample(
   id: ExampleId,
   input: string | undefined,
   prompt: string | undefined,
-  request: Request,
-  env: Env
+  request: Request
 ): Promise<ExampleRunResult> {
   switch (id) {
     case 'ai-generated-code':
-      return await runAiGeneratedCode(input, env);
+      return await runAiGeneratedCode(input);
     case 'data-analysis':
-      return await runDataAnalysis(input, prompt, env);
+      return await runDataAnalysis(input, prompt);
     case 'interactive-dev':
-      return await runInteractiveDevPreview(request, env);
+      return await runInteractiveDevPreview(request);
     case 'ci-testing':
-      return await runCiTesting(env);
+      return await runCiTesting();
     case 'security-untrusted':
-      return await runUntrustedCode(input, env);
+      return await runUntrustedCode(input);
   }
 }
 
-async function handleSessionRequest(env: Env, url: URL): Promise<Response> {
+async function handleSessionRequest(url: URL): Promise<Response> {
   const id = url.pathname.replace('/api/sessions/', '') as SessionId;
   const session = sessionById[id];
 
@@ -583,7 +579,7 @@ async function handleSessionRequest(env: Env, url: URL): Promise<Response> {
   }
 
   try {
-    const result = await runSession(id, env, url);
+    const result = await runSession(id, url);
     return json(result);
   } catch (error) {
     return json(
@@ -597,33 +593,30 @@ async function handleSessionRequest(env: Env, url: URL): Promise<Response> {
   }
 }
 
-async function runSession(id: SessionId, env: Env, url: URL): Promise<SessionRunResult> {
+async function runSession(id: SessionId, url: URL): Promise<SessionRunResult> {
   switch (id) {
     case 'fundamentals':
-      return await runSessionFundamentals(env);
+      return await runSessionFundamentals();
     case 'executing-code': {
-      const result = await runAiGeneratedCode(
-        `print("hello from python")
-print("sandbox fundamentals are reusable")`,
-        env
-      );
+      const result = await runAiGeneratedCode(`print("hello from python")
+print("sandbox fundamentals are reusable")`);
       return {
         ok: result.ok,
         sessionId: id,
         sandboxId: result.sandboxId,
-        summary: 'Executed Python safely and captured output.',
+        summary: sessionById[id].resultSummary,
         output: result.output,
         stderr: result.stderr,
         exitCode: result.exitCode
       };
     }
     case 'data-workflows': {
-      const result = await runDataAnalysis(undefined, 'What trends stand out by region?', env);
+      const result = await runDataAnalysis(undefined, 'What trends stand out by region?');
       return {
         ok: result.ok,
         sessionId: id,
         sandboxId: result.sandboxId,
-        summary: 'Ran CSV analysis workflow in sandbox.',
+        summary: sessionById[id].resultSummary,
         output: result.output,
         stderr: result.stderr,
         exitCode: result.exitCode,
@@ -632,24 +625,24 @@ print("sandbox fundamentals are reusable")`,
     }
     case 'preview-workflows': {
       const fakeRequest = new Request(url.toString());
-      const result = await runInteractiveDevPreview(fakeRequest, env);
+      const result = await runInteractiveDevPreview(fakeRequest);
       return {
         ok: result.ok,
         sessionId: id,
         sandboxId: result.sandboxId,
-        summary: 'Started preview workflow and exposed an app URL.',
+        summary: sessionById[id].resultSummary,
         previewUrl: result.previewUrl,
         details: result.details,
         exitCode: result.exitCode
       };
     }
     case 'automation-ci': {
-      const result = await runCiTesting(env);
+      const result = await runCiTesting();
       return {
         ok: result.ok,
         sessionId: id,
         sandboxId: result.sandboxId,
-        summary: 'Ran test automation workflow in isolation.',
+        summary: sessionById[id].resultSummary,
         output: result.output,
         stderr: result.stderr,
         exitCode: result.exitCode
@@ -658,7 +651,7 @@ print("sandbox fundamentals are reusable")`,
   }
 }
 
-async function runSessionFundamentals(env: Env): Promise<SessionRunResult> {
+async function runSessionFundamentals(): Promise<SessionRunResult> {
   const sandboxId = 'workshop-session-fundamentals';
   const sandbox = getSandbox(env.Sandbox, sandboxId, { normalizeId: true });
   const command = `echo "Session 1: Sandbox Fundamentals" && uname -a && echo "cwd: $(pwd)" && ls -1 /workspace | head -20`;
@@ -668,14 +661,14 @@ async function runSessionFundamentals(env: Env): Promise<SessionRunResult> {
     ok: result.success,
     sessionId: 'fundamentals',
     sandboxId,
-    summary: 'Executed a first shell command in an isolated sandbox.',
+    summary: sessionById.fundamentals.resultSummary,
     output: result.stdout,
     stderr: result.stderr,
     exitCode: result.exitCode
   };
 }
 
-async function handleTerminalBootstrap(env: Env): Promise<Response> {
+async function handleTerminalBootstrap(): Promise<Response> {
   const sandboxId = 'workshop-terminal';
   const terminalSessionId = 'live-terminal';
   const sandbox = getSandbox(env.Sandbox, sandboxId, { normalizeId: true });
@@ -706,7 +699,7 @@ async function handleTerminalBootstrap(env: Env): Promise<Response> {
   return json(response);
 }
 
-async function handleTerminalWebSocket(request: Request, env: Env, url: URL): Promise<Response> {
+async function handleTerminalWebSocket(request: Request, url: URL): Promise<Response> {
   if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
     return json({ ok: false, message: 'WebSocket upgrade required.' }, 426);
   }
@@ -734,7 +727,7 @@ async function handleTerminalWebSocket(request: Request, env: Env, url: URL): Pr
   return await proxyTerminal(sandbox, targetSession, request, { cols, rows });
 }
 
-async function runAiGeneratedCode(input: string | undefined, env: Env): Promise<ExampleRunResult> {
+async function runAiGeneratedCode(input: string | undefined): Promise<ExampleRunResult> {
   const sandboxId = 'workshop-ai-generated-code';
   const sandbox = getSandbox(env.Sandbox, sandboxId, { normalizeId: true });
 
@@ -764,7 +757,9 @@ print("sum:", sum(numbers))`;
     ok: !run.error,
     exampleId: 'ai-generated-code',
     sandboxId,
-    summary: run.error ? 'Code execution returned an interpreter error.' : 'Code executed in isolated context.',
+    summary: run.error
+      ? (exampleById['ai-generated-code'].messages?.failureSummary ?? 'Code execution returned an interpreter error.')
+      : (exampleById['ai-generated-code'].messages?.successSummary ?? 'Code executed in isolated context.'),
     output: combinedOutput,
     stderr: run.error ? JSON.stringify(run.error, null, 2) : undefined,
     exitCode: run.error ? 1 : 0,
@@ -774,8 +769,7 @@ print("sum:", sum(numbers))`;
 
 async function runDataAnalysis(
   input: string | undefined,
-  prompt: string | undefined,
-  env: Env
+  prompt: string | undefined
 ): Promise<ExampleRunResult> {
   const sandboxId = 'workshop-data-analysis';
   const sandbox = getSandbox(env.Sandbox, sandboxId, { normalizeId: true });
@@ -798,7 +792,7 @@ apac,870,24`;
   let usedAiFallback = false;
   try {
     generatedCode = await withTimeout(
-      generateDataAnalysisCode(question, csvStructure, env),
+      generateDataAnalysisCode(question, csvStructure),
       35000,
       'Workers AI analysis code generation'
     );
@@ -859,7 +853,8 @@ apac,870,24`;
         : usedExecutionFallback
           ? 'Analysis completed using execution fallback script (timeout recovery).'
           : 'AI-generated pandas analysis completed in sandbox.'
-      : 'AI-generated analysis failed. Review stderr output.',
+      : (exampleById['data-analysis'].messages?.failureSummary ??
+        'AI-generated analysis failed. Review stderr output.'),
     output: result.stdout,
     stderr: result.stderr,
     exitCode: result.exitCode,
@@ -876,7 +871,7 @@ apac,870,24`;
   };
 }
 
-async function runInteractiveDevPreview(request: Request, env: Env): Promise<ExampleRunResult> {
+async function runInteractiveDevPreview(request: Request): Promise<ExampleRunResult> {
   const sandboxId = 'workshop-interactive-dev';
   const sandbox = getSandbox(env.Sandbox, sandboxId, { normalizeId: true });
 
@@ -923,7 +918,9 @@ async function runInteractiveDevPreview(request: Request, env: Env): Promise<Exa
     ok: true,
     exampleId: 'interactive-dev',
     sandboxId,
-    summary: 'Preview server started in sandbox and exposed through URL.',
+    summary:
+      exampleById['interactive-dev'].messages?.successSummary ??
+      'Preview server started in sandbox and exposed through URL.',
     previewUrl: directPreviewUrl,
     details: {
       directPreviewUrl,
@@ -933,7 +930,7 @@ async function runInteractiveDevPreview(request: Request, env: Env): Promise<Exa
   };
 }
 
-async function runCiTesting(env: Env): Promise<ExampleRunResult> {
+async function runCiTesting(): Promise<ExampleRunResult> {
   const sandboxId = 'workshop-ci-testing';
   const sandbox = getSandbox(env.Sandbox, sandboxId, { normalizeId: true });
 
@@ -970,14 +967,16 @@ test('multiply works', () => {
     ok: result.success,
     exampleId: 'ci-testing',
     sandboxId,
-    summary: result.success ? 'Tests passed in an isolated sandbox.' : 'Test run failed in sandbox.',
+    summary: result.success
+      ? (exampleById['ci-testing'].messages?.successSummary ?? 'Tests passed in an isolated sandbox.')
+      : (exampleById['ci-testing'].messages?.failureSummary ?? 'Test run failed in sandbox.'),
     output: result.stdout,
     stderr: result.stderr,
     exitCode: result.exitCode
   };
 }
 
-async function runUntrustedCode(input: string | undefined, env: Env): Promise<ExampleRunResult> {
+async function runUntrustedCode(input: string | undefined): Promise<ExampleRunResult> {
   const sandboxId = 'workshop-security-untrusted';
   const sandbox = getSandbox(env.Sandbox, sandboxId, { normalizeId: true });
 
@@ -996,14 +995,16 @@ print("entries in /:", len(os.listdir("/")))`;
     ok: result.success,
     exampleId: 'security-untrusted',
     sandboxId,
-    summary: 'Untrusted code executed inside sandbox boundary with timeout controls.',
+    summary:
+      exampleById['security-untrusted'].messages?.successSummary ??
+      'Untrusted code executed inside sandbox boundary with timeout controls.',
     output: result.stdout,
     stderr: result.stderr,
     exitCode: result.exitCode
   };
 }
 
-async function serveSpaAssets(request: Request, env: Env): Promise<Response> {
+async function serveSpaAssets(request: Request): Promise<Response> {
   const assetResponse = await env.ASSETS.fetch(request);
 
   if (assetResponse.status !== 404) {

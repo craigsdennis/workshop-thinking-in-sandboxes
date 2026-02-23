@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "thinking-in-sandboxes-workshop",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-02-18",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS"
+  },
+  "containers": [
+    {
+      "class_name": "Sandbox",
+      "image": "./Dockerfile",
+      "instance_type": "lite",
+      "max_instances": 5
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "Sandbox",
+        "class_name": "Sandbox"
+      }
+    ]
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["Sandbox"]
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}
